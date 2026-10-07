@@ -1,24 +1,58 @@
-use std::io;
+mod assembly;
+use assembly::{Instruction, Opcode, Operand};
+use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-
 use ratatui::{
-    symbols,
+    DefaultTerminal, Frame,
     buffer::Buffer,
-    layout::{Rect, Constraint, Direction, Layout},
+    layout::{Constraint, Layout, Rect},
     style::Stylize,
     symbols::border,
-    text::{Line, Text},
-    widgets::{Block, Paragraph, Widget, LineGauge},
-    DefaultTerminal, Frame,
+    text::Line,
+    widgets::{Block, Widget},
 };
+use std::{fs, io};
 
 fn main() -> io::Result<()> {
-    ratatui::run(|terminal| App::default().run(terminal));
+    let args = Args::parse();
+
+    let file_contents = fs::read_to_string(args.source).expect("Error: Unable to read source file");
+
+    if !args.check {
+        ratatui::run(|terminal| App::default().run(terminal))?;
+    }
+
     Ok(())
 }
 
+fn parse_instructions(instructions: &str) -> Result<[Instruction; 256], Vec<&str>> {
+    let error_lines: Vec<&str> = Vec::new();
+
+    for (line_number, instruction) in instructions.lines().enumerate() {
+        let line_number = line_number + 1;
+    }
+
+    let nothing = Instruction {
+        opcode: Opcode::NOOP,
+        operand: Operand::Constant(0u8),
+    };
+    return Ok([nothing; 256]);
+}
+
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Assembly file to run
+    source: String,
+
+    /// Check the assembly file for errors
+    #[arg(short, long, action = clap::ArgAction::SetTrue)]
+    check: bool,
+}
+
 #[derive(Default, Debug)]
-struct App{
+struct App {
     cpu: CPU,
     exit: bool,
 }
@@ -64,7 +98,6 @@ impl App {
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-
         //===== Overarching box =====
         let title = Line::from(" Relay CPU Simulator ".bold());
         let block = Block::bordered()
@@ -74,15 +107,15 @@ impl Widget for &App {
         block.render(area, buf);
 
         //===== Split into source veiwer and mem/debug =====
-        let [left, right] = Layout::horizontal([
-            Constraint::Percentage(30),
-            Constraint::Percentage(80),
-        ])
-        .areas(app_area);
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(80)])
+                .areas(app_area);
 
         //===== Create source veiwer =====
         let source_title = Line::from(" Instructions ".bold());
-        let source_block = Block::bordered().title(source_title.centered()).border_set(border::THICK);
+        let source_block = Block::bordered()
+            .title(source_title.centered())
+            .border_set(border::THICK);
         let source_area = source_block.inner(left);
         source_block.render(left, buf);
 
@@ -90,82 +123,56 @@ impl Widget for &App {
         let [register_area, ram_area, debug_tools_area] = Layout::vertical([
             Constraint::Percentage(10),
             Constraint::Percentage(80),
-            Constraint::Percentage(10)
-        ]).areas(right);
+            Constraint::Percentage(10),
+        ])
+        .areas(right);
 
         //===== Render debug block =====
         let debug_title = Line::from(" Debug Tools ".bold());
-        let debug_block = Block::bordered().title(debug_title.centered()).border_set(border::THICK);
+        let debug_block = Block::bordered()
+            .title(debug_title.centered())
+            .border_set(border::THICK);
         let debug_inner_area = debug_block.inner(area);
         debug_block.render(debug_tools_area, buf);
 
         //===== Split RAM and Register areas into left and right =====
-        let [card_x_area, card_y_area] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .areas(ram_area);
-        let [register_a_area, register_b_area] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .areas(register_area);
+        let [card_x_area, card_y_area] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(ram_area);
+        let [register_a_area, register_b_area] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(register_area);
 
         //===== Render registers =====
         let register_a_title = Line::from(" Register A ".bold());
-        let register_a_block = Block::bordered().title(register_a_title.centered()).border_set(border::THICK);
+        let register_a_block = Block::bordered()
+            .title(register_a_title.centered())
+            .border_set(border::THICK);
         let register_a_inner = register_a_block.inner(area);
         register_a_block.render(register_a_area, buf);
 
         let register_b_title = Line::from(" Register B ".bold());
-        let register_b_block = Block::bordered().title(register_b_title.centered()).border_set(border::THICK);
+        let register_b_block = Block::bordered()
+            .title(register_b_title.centered())
+            .border_set(border::THICK);
         let register_b_inner = register_b_block.inner(area);
         register_b_block.render(register_b_area, buf);
 
         //===== Render RAM =====
         let card_x_title = Line::from(" Card X ".bold());
-        let card_x_block = Block::bordered().title(card_x_title.centered()).border_set(border::THICK);
+        let card_x_block = Block::bordered()
+            .title(card_x_title.centered())
+            .border_set(border::THICK);
         let card_x_inner = card_x_block.inner(area);
         card_x_block.render(card_x_area, buf);
 
         let card_y_title = Line::from(" Card Y ".bold());
-        let card_y_block = Block::bordered().title(card_y_title.centered()).border_set(border::THICK);
+        let card_y_block = Block::bordered()
+            .title(card_y_title.centered())
+            .border_set(border::THICK);
         let card_y_inner = card_y_block.inner(area);
         card_y_block.render(card_y_area, buf);
     }
-}
-
-#[repr(u8)]
-#[derive(Copy, Clone, Debug)]
-enum Opcode {
-    SUM = 0b0000u8,
-    NOOP = 0b0001u8, // Not in use/do nothing
-    SUB = 0b0010,
-    // 0011 NIU
-    SFTL = 0b0100u8,
-    SFTR = 0b0101u8,
-    PSHA = 0b0110u8,
-    PSHB = 0b0111u8,
-    PULA = 0b1000u8,
-    PULB = 0b1001u8,
-    GTLA = 0b1010u8,
-    GTLC = 0b1011u8,
-    GTZA = 0b1100u8,
-    GTZC = 0b1101u8,
-    //1110 NIU
-    STP = 0b1111u8,
-}
-
-#[derive(Copy, Clone, Debug)]
-enum Operand{
-    Address(u8),
-    Constant(u8),
-}
-
-#[derive(Copy, Clone, Debug)]
-struct Instruction {
-    opcode: Opcode,
-    operand: Operand,
 }
 
 // TODO: add I/O
@@ -181,14 +188,14 @@ struct CPU {
 }
 
 impl Default for CPU {
-    fn default() -> Self{
-        Self{
-            A:0,
-            B:0,
-            Mem:0,
-            ProgramCounter:0,
+    fn default() -> Self {
+        Self {
+            A: 0,
+            B: 0,
+            Mem: 0,
+            ProgramCounter: 0,
             RAM: [0u8; 32],
-            Instructions: [None; 256]
+            Instructions: [None; 256],
         }
     }
 }
