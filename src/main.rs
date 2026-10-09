@@ -9,34 +9,53 @@ use ratatui::{
     style::Stylize,
     symbols::border,
     text::Line,
-    widgets::{Block, Widget},
+    widgets::{Block, Paragraph, Widget},
 };
 use std::{fs, io};
 
+const MAX_PROGRAM_LENGTH: usize = 256;
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
     let file_contents = fs::read_to_string(args.source).expect("Error: Unable to read source file");
 
-    if !args.check {
-        ratatui::run(|terminal| App::default().run(terminal))?;
+    match parse_instructions(&file_contents) {
+        Ok(instructions) => {
+            if args.check {
+                println!("Source code is OK!");
+            } else {
+                ratatui::run(|terminal| App::new(instructions).run(terminal))?;
+            }
+        }
+        Err(error_messages) => {
+            for message in error_messages {
+                println!("{}", message);
+            }
+        }
     }
-
     Ok(())
 }
 
-fn parse_instructions(instructions: &str) -> Result<[Instruction; 256], Vec<&str>> {
-    let error_lines: Vec<&str> = Vec::new();
-
-    for (line_number, instruction) in instructions.lines().enumerate() {
-        let line_number = line_number + 1;
-    }
-
-    let nothing = Instruction {
+fn parse_instructions(source: &str) -> Result<[Instruction; MAX_PROGRAM_LENGTH], Vec<String>> {
+    let noop = Instruction {
         opcode: Opcode::NOOP,
         operand: Operand::Constant(0u8),
     };
-    return Ok([nothing; 256]);
+    let mut instructions = [noop; MAX_PROGRAM_LENGTH];
+    let mut error_lines: Vec<String> = Vec::new();
+
+    for (index, instruction_str) in source.lines().enumerate() {
+        match instruction_str.parse() {
+            Ok(instruction) => instructions[index] = instruction,
+            Err(e) => error_lines.push(format!("Error at line {}: {}", index + 1, e)),
+        }
+    }
+
+    if error_lines.is_empty() {
+        Ok(instructions)
+    } else {
+        Err(error_lines)
+    }
 }
 
 /// Simple program to greet a person
@@ -51,13 +70,23 @@ struct Args {
     check: bool,
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct App {
     cpu: CPU,
     exit: bool,
 }
 
 impl App {
+    fn new(instructions: [Instruction; MAX_PROGRAM_LENGTH]) -> Self {
+        Self {
+            cpu: CPU {
+                instructions,
+                ..CPU::default()
+            },
+            exit: false,
+        }
+    }
+
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
             terminal.draw(|frame| self.draw(frame));
@@ -179,23 +208,23 @@ impl Widget for &App {
 // TODO: Get max to figure out what Mem is
 #[derive(Copy, Clone, Debug)]
 struct CPU {
-    A: u8,
-    B: u8,
-    Mem: u8,
-    ProgramCounter: u8,
-    RAM: [u8; 32],
-    Instructions: [Option<Instruction>; 256],
+    register_a: u8,
+    register_b: u8,
+    mem: u8,
+    program_counter: u8,
+    ram: [u8; 32],
+    instructions: [Instruction; MAX_PROGRAM_LENGTH],
 }
 
 impl Default for CPU {
     fn default() -> Self {
         Self {
-            A: 0,
-            B: 0,
-            Mem: 0,
-            ProgramCounter: 0,
-            RAM: [0u8; 32],
-            Instructions: [None; 256],
+            register_a: 0,
+            register_b: 0,
+            mem: 0,
+            program_counter: 0,
+            ram: [0u8; 32],
+            instructions: [Instruction::default(); MAX_PROGRAM_LENGTH],
         }
     }
 }

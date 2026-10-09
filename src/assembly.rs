@@ -1,8 +1,8 @@
 use std::{num::ParseIntError, str::FromStr};
-use strum::EnumString;
+use strum::{Display, EnumString};
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, EnumString)]
+#[derive(Copy, Clone, Debug, EnumString, Display)]
 pub enum Opcode {
     SUMA = 0b0000u8,
     SUMC = 0b0001u8, // Not in use/do nothing
@@ -43,6 +43,15 @@ pub struct Instruction {
     pub operand: Operand,
 }
 
+impl Default for Instruction {
+    fn default() -> Self {
+        Self {
+            opcode: Opcode::NOOP,
+            operand: Operand::Constant(0),
+        }
+    }
+}
+
 pub enum ParseInstructionError {
     InvalidFormat,
     InvalidOpcode,
@@ -61,6 +70,16 @@ impl From<strum::ParseError> for ParseInstructionError {
     }
 }
 
+impl std::fmt::Display for ParseInstructionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidFormat => write!(f, "Invalid Format"),
+            Self::InvalidOpcode => write!(f, "Invalid Opcode"),
+            Self::InvalidOperand(error) => write!(f, "Error parsing Operand ({})", error),
+        }
+    }
+}
+
 impl FromStr for Instruction {
     type Err = ParseInstructionError;
 
@@ -74,7 +93,7 @@ impl FromStr for Instruction {
         }
 
         let opcode: Opcode = opcode_str.parse()?;
-        let operand_value: u8 = u8::from_str_radix(s, 2)?;
+        let operand_value: u8 = u8::from_str_radix(operand_str, 2)?;
 
         let operand = if opcode.takes_constant() {
             Operand::Constant(operand_value)
@@ -83,5 +102,15 @@ impl FromStr for Instruction {
         };
 
         Ok(Instruction { opcode, operand })
+    }
+}
+
+impl std::fmt::Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.operand {
+            Operand::Address(value) | Operand::Constant(value) => {
+                write!(f, "{} {}", self.opcode, value)
+            }
+        }
     }
 }
