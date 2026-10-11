@@ -109,7 +109,7 @@ impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.operand {
             Operand::Address(value) | Operand::Constant(value) => {
-                write!(f, "{} {}", self.opcode, value)
+                write!(f, "{} {:08b}", self.opcode, value) //:08b makes it display as 8 digits of binary
             }
         }
     }

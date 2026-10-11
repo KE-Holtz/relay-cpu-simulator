@@ -6,14 +6,18 @@ use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    style::Stylize,
-    symbols::border,
-    text::Line,
+    prelude::Style,
+    style::{Color, Stylize},
+    symbols::{border, line},
+    text::{self, Line, Text},
     widgets::{Block, Paragraph, Widget},
 };
+use std::{cmp::max, fmt::format};
 use std::{fs, io};
 
 const MAX_PROGRAM_LENGTH: usize = 256;
+const ADDRESSES_IN_RAM: u8 = 32;
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
@@ -74,6 +78,8 @@ struct Args {
 struct App {
     cpu: CPU,
     exit: bool,
+    source_code_scroll: Option<u8>, //When Some(), user defined scroll, go to that value. When None,
+                                    //autoscroll
 }
 
 impl App {
@@ -84,6 +90,7 @@ impl App {
                 ..CPU::default()
             },
             exit: false,
+            source_code_scroll: None,
         }
     }
 
@@ -116,6 +123,7 @@ impl App {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
+            KeyCode::Down => self.cpu.program_counter += 1,
             _ => {}
         }
     }
@@ -148,6 +156,33 @@ impl Widget for &App {
         let source_area = source_block.inner(left);
         source_block.render(left, buf);
 
+        let mut lines = vec![];
+        for (index, instruction) in self.cpu.instructions.iter().enumerate() {
+            let line_number = index + 1;
+            let instruction_line = if index == usize::from(self.cpu.program_counter) {
+                Line::from(format!("{:03} | {}", line_number, instruction))
+                    .style(Style::default().fg(Color::Red))
+            } else {
+                Line::from(format!("{:03} | {}", line_number, instruction))
+            };
+            lines.push(instruction_line);
+        }
+        let text = Text::from(lines);
+
+        let midpoint = source_area.height / 2;
+        let scroll_amount = match self.source_code_scroll {
+            Some(amount) => u16::from(amount),
+            None => {
+                if midpoint > u16::from(self.cpu.program_counter) {
+                    0
+                } else {
+                    u16::from(self.cpu.program_counter) - midpoint
+                }
+            }
+        };
+        let paragraph = Paragraph::new(text).scroll((scroll_amount, 0));
+        paragraph.render(source_area, buf);
+
         //===== Split right side into registers, ram, and debug =====
         let [register_area, ram_area, debug_tools_area] = Layout::vertical([
             Constraint::Percentage(10),
@@ -177,30 +212,63 @@ impl Widget for &App {
         let register_a_block = Block::bordered()
             .title(register_a_title.centered())
             .border_set(border::THICK);
-        let register_a_inner = register_a_block.inner(area);
+        let register_a_inner = register_a_block.inner(register_a_area);
         register_a_block.render(register_a_area, buf);
+
+        let register_a_paragraph =
+            Paragraph::new(format!("{:08b}", self.cpu.register_a)).centered();
+        register_a_paragraph.render(register_a_inner, buf);
 
         let register_b_title = Line::from(" Register B ".bold());
         let register_b_block = Block::bordered()
             .title(register_b_title.centered())
             .border_set(border::THICK);
-        let register_b_inner = register_b_block.inner(area);
+        let register_b_inner = register_b_block.inner(register_b_area);
         register_b_block.render(register_b_area, buf);
+
+        let register_b_paragraph =
+            Paragraph::new(format!("{:08b}", self.cpu.register_b)).centered();
+        register_b_paragraph.render(register_b_inner, buf);
 
         //===== Render RAM =====
         let card_x_title = Line::from(" Card X ".bold());
         let card_x_block = Block::bordered()
             .title(card_x_title.centered())
             .border_set(border::THICK);
-        let card_x_inner = card_x_block.inner(area);
+        let card_x_inner = card_x_block.inner(card_x_area);
         card_x_block.render(card_x_area, buf);
 
         let card_y_title = Line::from(" Card Y ".bold());
         let card_y_block = Block::bordered()
             .title(card_y_title.centered())
             .border_set(border::THICK);
-        let card_y_inner = card_y_block.inner(area);
+        let card_y_inner = card_y_block.inner(card_y_area);
         card_y_block.render(card_y_area, buf);
+
+        let mut card_x_lines = vec![];
+        let mut card_y_lines = vec![];
+        for (address, value) in self.cpu.ram.iter().enumerate() {
+            let line = if matches!(address, 14 | 15 | 30 | 31) {
+                Line::from(format!("{:08b}: {:08b}", address, value))
+                    .style(Style::default().fg(Color::Red))
+            } else {
+                Line::from(format!("{:08b}: {:08b}", address, value))
+            };
+
+            if address < usize::from(ADDRESSES_IN_RAM / 2) {
+                card_x_lines.push(line);
+            } else {
+                card_y_lines.push(line);
+            }
+        }
+        let card_x_text = Text::from(card_x_lines);
+        let card_y_text = Text::from(card_y_lines);
+
+        let card_x_paragraph = Paragraph::new(card_x_text).centered();
+        let card_y_paragraph = Paragraph::new(card_y_text).centered();
+
+        card_x_paragraph.render(card_x_inner, buf);
+        card_y_paragraph.render(card_y_inner, buf);
     }
 }
 
