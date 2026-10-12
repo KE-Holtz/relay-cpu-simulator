@@ -12,8 +12,8 @@ use ratatui::{
     text::{Line, Text},
     widgets::{Block, Paragraph, Widget},
 };
-use std::time::SystemTime;
-use std::{fs, io};
+use std::fmt::Display;
+use std::{fmt::write, fs, io};
 use std::{str::FromStr, time::Duration};
 
 use crate::{
@@ -68,7 +68,7 @@ fn parse_instructions(source: &str) -> Result<[Instruction; MAX_PROGRAM_LENGTH],
     }
 }
 
-/// Simple program to greet a person
+///An assembly simulator for @cockateil's relay CPU
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -118,6 +118,10 @@ impl Speed {
         return matches!(self, Paused(_) | InstantPaused);
     }
 
+    fn is_instant(&self) -> bool {
+        return matches!(self, Instant | InstantPaused);
+    }
+
     fn duration(&self) -> Duration {
         match self {
             Speed::Hertz(hz) => Duration::from_secs_f64(1.0 / hz),
@@ -145,6 +149,21 @@ impl FromStr for Speed {
         }
 
         Ok(Speed::Paused(value))
+    }
+}
+
+impl Display for Speed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Hertz(hz) => format!("{} Hz", hz),
+                Paused(hz) => format!("{} Hz, paused", hz),
+                Instant => String::from("Unlimited Hz"),
+                InstantPaused => String::from("Unlimited Hz, paused"),
+            }
+        )
     }
 }
 
@@ -196,6 +215,8 @@ impl App {
             KeyCode::Char('q') => self.exit(),
             KeyCode::Down => self.scroll_down(),
             KeyCode::Up => self.scroll_up(),
+            KeyCode::Left => self.decrease_speed(),
+            KeyCode::Right => self.increase_speed(),
             KeyCode::Char('n') => self.step(),
             KeyCode::Char(' ') => self.toggle_paused(),
             _ => {}
@@ -217,6 +238,32 @@ impl App {
 
     fn scroll_down(&mut self) {
         self.source_code_scroll = UserDefined(self.source_code_scroll.value().saturating_add(1))
+    }
+
+    fn increase_speed(&mut self) {
+        self.speed = match self.speed {
+            Instant => Instant,
+            InstantPaused => InstantPaused,
+            Paused(hz) => Paused(if hz < 1.0 { hz + 0.1 } else { hz + 1.0 }),
+            Hertz(hz) => Hertz(if hz < 1.0 { hz + 0.1 } else { hz + 1.0 }),
+        }
+    }
+
+    fn decrease_speed(&mut self) {
+        self.speed = match self.speed {
+            Instant => Instant,
+            InstantPaused => InstantPaused,
+            Paused(hz) => Paused(if hz <= 1.0 {
+                (hz - 0.1).max(0.1)
+            } else {
+                (hz - 1.0).max(0.1)
+            }),
+            Hertz(hz) => Hertz(if hz <= 1.0 {
+                (hz - 0.1).max(0.1)
+            } else {
+                (hz - 1.0).max(0.1)
+            }),
+        }
     }
 
     fn toggle_paused(&mut self) {
@@ -259,8 +306,18 @@ impl Widget for &mut App {
 
         //===== Create source veiwer =====
         let source_title = Line::from(" Instructions ".bold());
+        let source_title_bottom = Line::from(
+            if self.cpu.halted {
+                format!(" {}, halted", self.speed)
+            } else {
+                format!(" {} ", self.speed)
+            }
+            .bold(),
+        );
+
         let source_block = Block::bordered()
             .title(source_title.centered())
+            .title_bottom(source_title_bottom.centered())
             .border_set(border::THICK)
             .fg(color);
         let source_area = source_block.inner(left);
@@ -313,8 +370,10 @@ impl Widget for &mut App {
             .fg(color);
         let debug_inner_area = debug_block.inner(debug_tools_area);
         debug_block.render(debug_tools_area, buf);
-        let debug_line =
-            Line::from("Scroll: <Up>/<Down> | Step: n | Toggle pause: <Space>").fg(Color::White);
+        let debug_line = Line::from(
+            "Scroll: <Up>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right>",
+        )
+        .fg(Color::White);
         debug_line.render(debug_inner_area, buf);
 
         //===== Split RAM and Register areas into left and right =====
