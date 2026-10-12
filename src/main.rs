@@ -85,7 +85,8 @@ struct Args {
 
 #[derive(Debug)]
 struct App {
-    cpu: CPU,
+    memory: Memory,
+    instructions: [Instruction; MAX_PROGRAM_LENGTH],
     exit: bool,
     source_code_scroll: ScrollType,
     speed: Speed,
@@ -170,10 +171,10 @@ impl Display for Speed {
 impl App {
     fn new(instructions: [Instruction; MAX_PROGRAM_LENGTH], speed: Speed) -> Self {
         Self {
-            cpu: CPU {
-                instructions,
-                ..CPU::default()
+            memory: Memory {
+                ..Memory::default()
             },
+            instructions,
             exit: false,
             source_code_scroll: Natural(0),
             speed,
@@ -226,9 +227,10 @@ impl App {
     fn step(&mut self) {
         //Make scrolling automatic again. The value doesn't really mean a lot it just needs to be
         //stored so manual scrolling can start where natural left off.
-        if !self.cpu.halted {
+        if !self.memory.halted {
             self.source_code_scroll = Natural(self.source_code_scroll.value());
-            self.cpu.step();
+            self.memory
+                .step(self.instructions[usize::from(self.memory.program_counter)]);
         }
     }
 
@@ -282,7 +284,7 @@ impl App {
 
 impl Widget for &mut App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let color = if self.cpu.halted {
+        let color = if self.memory.halted {
             Color::Red
         } else if self.speed.is_paused() {
             Color::Blue
@@ -307,7 +309,7 @@ impl Widget for &mut App {
         //===== Create source veiwer =====
         let source_title = Line::from(" Instructions ".bold());
         let source_title_bottom = Line::from(
-            if self.cpu.halted {
+            if self.memory.halted {
                 format!(" {}, halted", self.speed)
             } else {
                 format!(" {} ", self.speed)
@@ -324,9 +326,9 @@ impl Widget for &mut App {
         source_block.render(left, buf);
 
         let mut lines = vec![];
-        for (index, instruction) in self.cpu.instructions.iter().enumerate() {
-            let instruction_line = if index == usize::from(self.cpu.program_counter) {
-                let inline_message = if self.cpu.halted {
+        for (index, instruction) in self.instructions.iter().enumerate() {
+            let instruction_line = if index == usize::from(self.memory.program_counter) {
+                let inline_message = if self.memory.halted {
                     "(Halted)"
                 } else if self.speed.is_paused() {
                     "(Runs on step)"
@@ -346,7 +348,7 @@ impl Widget for &mut App {
         let scroll_amount = match self.source_code_scroll {
             UserDefined(amount) => amount,
             Natural(_) => {
-                let amount = u16::from(self.cpu.program_counter).saturating_sub(midpoint);
+                let amount = u16::from(self.memory.program_counter).saturating_sub(midpoint);
                 self.source_code_scroll = Natural(amount);
                 amount
             }
@@ -393,7 +395,7 @@ impl Widget for &mut App {
         let register_a_inner = register_a_block.inner(register_a_area);
         register_a_block.render(register_a_area, buf);
 
-        let register_a_paragraph = Paragraph::new(format!("{:08b}", self.cpu.register_a))
+        let register_a_paragraph = Paragraph::new(format!("{:08b}", self.memory.register_a))
             .centered()
             .fg(Color::White);
         register_a_paragraph.render(register_a_inner, buf);
@@ -406,7 +408,7 @@ impl Widget for &mut App {
         let register_b_inner = register_b_block.inner(register_b_area);
         register_b_block.render(register_b_area, buf);
 
-        let register_b_paragraph = Paragraph::new(format!("{:08b}", self.cpu.register_b))
+        let register_b_paragraph = Paragraph::new(format!("{:08b}", self.memory.register_b))
             .centered()
             .fg(Color::White);
         register_b_paragraph.render(register_b_inner, buf);
@@ -430,7 +432,7 @@ impl Widget for &mut App {
 
         let mut card_x_lines = vec![];
         let mut card_y_lines = vec![];
-        for (address, value) in self.cpu.ram.iter().enumerate() {
+        for (address, value) in self.memory.ram.iter().enumerate() {
             let line = if matches!(address, 14 | 15 | 30 | 31) {
                 Line::from(format!("{:08b}: {:08b}", address, value))
                     .style(Style::default().fg(Color::Red))
@@ -458,17 +460,16 @@ impl Widget for &mut App {
 // TODO: add I/O
 // TODO: Get max to figure out what Mem is
 #[derive(Copy, Clone, Debug)]
-struct CPU {
+struct Memory {
     register_a: u8,
     register_b: u8,
     mem: u8,
     program_counter: u8,
     ram: [u8; 32],
-    instructions: [Instruction; MAX_PROGRAM_LENGTH],
     halted: bool,
 }
 
-impl Default for CPU {
+impl Default for Memory {
     fn default() -> Self {
         Self {
             register_a: 0,
@@ -476,15 +477,13 @@ impl Default for CPU {
             mem: 0,
             program_counter: 0,
             ram: [0u8; 32],
-            instructions: [Instruction::default(); MAX_PROGRAM_LENGTH],
             halted: false,
         }
     }
 }
 
-impl CPU {
-    fn step(&mut self) {
-        let instruction = self.instructions[usize::from(self.program_counter)];
+impl Memory {
+    fn step(&mut self, instruction: Instruction) {
         let inrement_counter = self.execute_instruction(instruction);
 
         if inrement_counter {
