@@ -12,8 +12,10 @@ use ratatui::{
     text::{self, Line, Text},
     widgets::{Block, Paragraph, Widget},
 };
-use std::{cmp::max, fmt::format};
+use std::{cmp::max, cmp::min};
 use std::{fs, io};
+
+use crate::ScrollType::{Natural, UserDefined};
 
 const MAX_PROGRAM_LENGTH: usize = 256;
 const ADDRESSES_IN_RAM: u8 = 32;
@@ -78,8 +80,21 @@ struct Args {
 struct App {
     cpu: CPU,
     exit: bool,
-    source_code_scroll: Option<u8>, //When Some(), user defined scroll, go to that value. When None,
-                                    //autoscroll
+    source_code_scroll: ScrollType,
+}
+
+#[derive(Debug)]
+enum ScrollType {
+    Natural(u16),
+    UserDefined(u16),
+}
+
+impl ScrollType {
+    fn value(&self) -> u16 {
+        match self {
+            Natural(value) | UserDefined(value) => *value,
+        }
+    }
 }
 
 impl App {
@@ -90,7 +105,7 @@ impl App {
                 ..CPU::default()
             },
             exit: false,
-            source_code_scroll: None,
+            source_code_scroll: Natural(0),
         }
     }
 
@@ -103,7 +118,7 @@ impl App {
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         frame.render_widget(self, frame.area());
     }
 
@@ -123,8 +138,39 @@ impl App {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
-            KeyCode::Down => self.cpu.program_counter += 1,
+            KeyCode::Down => {
+                self.source_code_scroll = UserDefined(
+                    if self.source_code_scroll.value() + 1
+                        > (MAX_PROGRAM_LENGTH - 1)
+                            .try_into()
+                            .expect("Program length greater than max scroll")
+                    {
+                        (MAX_PROGRAM_LENGTH - 1)
+                            .try_into()
+                            .expect("Program length greater than max scroll")
+                    } else {
+                        self.source_code_scroll.value() + 1
+                    },
+                )
+            }
+            KeyCode::Up => {
+                self.source_code_scroll = UserDefined(if self.source_code_scroll.value() > 0 {
+                    self.source_code_scroll.value() - 1
+                } else {
+                    0
+                })
+            }
+            KeyCode::Char('n') => self.step(),
             _ => {}
+        }
+    }
+
+    fn step(&mut self) {
+        //Make scrolling automatic again. The value doesn't really mean a lot it just needs to be
+        //stored so manual scrolling can start where natural left off.
+        if !self.cpu.halted {
+            self.source_code_scroll = Natural(self.source_code_scroll.value());
+            self.cpu.step();
         }
     }
 
@@ -133,13 +179,20 @@ impl App {
     }
 }
 
-impl Widget for &App {
+impl Widget for &mut App {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let color = if self.cpu.halted {
+            Color::Red
+        } else {
+            Color::Green
+        };
+
         //===== Overarching box =====
         let title = Line::from(" Relay CPU Simulator ".bold());
         let block = Block::bordered()
             .title(title.centered())
-            .border_set(border::THICK);
+            .border_set(border::THICK)
+            .fg(color);
         let app_area = block.inner(area);
         block.render(area, buf);
 
@@ -152,18 +205,23 @@ impl Widget for &App {
         let source_title = Line::from(" Instructions ".bold());
         let source_block = Block::bordered()
             .title(source_title.centered())
-            .border_set(border::THICK);
+            .border_set(border::THICK)
+            .fg(color);
         let source_area = source_block.inner(left);
         source_block.render(left, buf);
 
         let mut lines = vec![];
         for (index, instruction) in self.cpu.instructions.iter().enumerate() {
-            let line_number = index + 1;
             let instruction_line = if index == usize::from(self.cpu.program_counter) {
-                Line::from(format!("{:03} | {}", line_number, instruction))
-                    .style(Style::default().fg(Color::Red))
+                let inline_message = if self.cpu.halted {
+                    "(Halted)"
+                } else {
+                    "(Runs on step)"
+                };
+                Line::from(format!("{:03} | {} {}", index, instruction, inline_message))
+                    .fg(Color::Red)
             } else {
-                Line::from(format!("{:03} | {}", line_number, instruction))
+                Line::from(format!("{:03} | {}", index, instruction)).fg(Color::White)
             };
             lines.push(instruction_line);
         }
@@ -171,13 +229,11 @@ impl Widget for &App {
 
         let midpoint = source_area.height / 2;
         let scroll_amount = match self.source_code_scroll {
-            Some(amount) => u16::from(amount),
-            None => {
-                if midpoint > u16::from(self.cpu.program_counter) {
-                    0
-                } else {
-                    u16::from(self.cpu.program_counter) - midpoint
-                }
+            UserDefined(amount) => amount,
+            Natural(_) => {
+                let amount = u16::from(self.cpu.program_counter).saturating_sub(midpoint);
+                self.source_code_scroll = Natural(amount);
+                amount
             }
         };
         let paragraph = Paragraph::new(text).scroll((scroll_amount, 0));
@@ -195,9 +251,12 @@ impl Widget for &App {
         let debug_title = Line::from(" Debug Tools ".bold());
         let debug_block = Block::bordered()
             .title(debug_title.centered())
-            .border_set(border::THICK);
-        let debug_inner_area = debug_block.inner(area);
+            .border_set(border::THICK)
+            .fg(color);
+        let debug_inner_area = debug_block.inner(debug_tools_area);
         debug_block.render(debug_tools_area, buf);
+        let debug_line = Line::from("Scroll: <Up>/<Down>, Step: n").fg(Color::White);
+        debug_line.render(debug_inner_area, buf);
 
         //===== Split RAM and Register areas into left and right =====
         let [card_x_area, card_y_area] =
@@ -211,37 +270,43 @@ impl Widget for &App {
         let register_a_title = Line::from(" Register A ".bold());
         let register_a_block = Block::bordered()
             .title(register_a_title.centered())
-            .border_set(border::THICK);
+            .border_set(border::THICK)
+            .fg(color);
         let register_a_inner = register_a_block.inner(register_a_area);
         register_a_block.render(register_a_area, buf);
 
-        let register_a_paragraph =
-            Paragraph::new(format!("{:08b}", self.cpu.register_a)).centered();
+        let register_a_paragraph = Paragraph::new(format!("{:08b}", self.cpu.register_a))
+            .centered()
+            .fg(Color::White);
         register_a_paragraph.render(register_a_inner, buf);
 
         let register_b_title = Line::from(" Register B ".bold());
         let register_b_block = Block::bordered()
             .title(register_b_title.centered())
-            .border_set(border::THICK);
+            .border_set(border::THICK)
+            .fg(color);
         let register_b_inner = register_b_block.inner(register_b_area);
         register_b_block.render(register_b_area, buf);
 
-        let register_b_paragraph =
-            Paragraph::new(format!("{:08b}", self.cpu.register_b)).centered();
+        let register_b_paragraph = Paragraph::new(format!("{:08b}", self.cpu.register_b))
+            .centered()
+            .fg(Color::White);
         register_b_paragraph.render(register_b_inner, buf);
 
         //===== Render RAM =====
         let card_x_title = Line::from(" Card X ".bold());
         let card_x_block = Block::bordered()
             .title(card_x_title.centered())
-            .border_set(border::THICK);
+            .border_set(border::THICK)
+            .fg(color);
         let card_x_inner = card_x_block.inner(card_x_area);
         card_x_block.render(card_x_area, buf);
 
         let card_y_title = Line::from(" Card Y ".bold());
         let card_y_block = Block::bordered()
             .title(card_y_title.centered())
-            .border_set(border::THICK);
+            .border_set(border::THICK)
+            .fg(color);
         let card_y_inner = card_y_block.inner(card_y_area);
         card_y_block.render(card_y_area, buf);
 
@@ -252,7 +317,7 @@ impl Widget for &App {
                 Line::from(format!("{:08b}: {:08b}", address, value))
                     .style(Style::default().fg(Color::Red))
             } else {
-                Line::from(format!("{:08b}: {:08b}", address, value))
+                Line::from(format!("{:08b}: {:08b}", address, value)).fg(Color::White)
             };
 
             if address < usize::from(ADDRESSES_IN_RAM / 2) {
@@ -282,6 +347,7 @@ struct CPU {
     program_counter: u8,
     ram: [u8; 32],
     instructions: [Instruction; MAX_PROGRAM_LENGTH],
+    halted: bool,
 }
 
 impl Default for CPU {
@@ -293,6 +359,60 @@ impl Default for CPU {
             program_counter: 0,
             ram: [0u8; 32],
             instructions: [Instruction::default(); MAX_PROGRAM_LENGTH],
+            halted: false,
         }
+    }
+}
+
+impl CPU {
+    fn step(&mut self) {
+        let instruction = self.instructions[usize::from(self.program_counter)];
+        let inrement_counter = self.execute_instruction(instruction);
+
+        if inrement_counter {
+            self.program_counter += 1;
+        }
+    }
+
+    //Returns true if the program_counter should be incremented after the instruction is run
+    fn execute_instruction(&mut self, instruction: Instruction) -> bool {
+        match instruction.opcode {
+            Opcode::SUMA => self.register_a += self.register_b, //TODO: Determine overflow behaviour
+            Opcode::SUMC => self.register_a += instruction.operand.value(),
+            Opcode::SUBA => self.register_a -= self.register_b, //TODO: Determine underflow behaviour
+            Opcode::SUBC => self.register_a -= instruction.operand.value(),
+            Opcode::SFTL => self.ram[usize::from(instruction.operand.value())] <<= 1,
+            Opcode::SFTR => self.ram[usize::from(instruction.operand.value())] >>= 1,
+            Opcode::PSHA => self.ram[usize::from(instruction.operand.value())] = self.register_a,
+            Opcode::PSHB => self.ram[usize::from(instruction.operand.value())] = self.register_b,
+            Opcode::PULA => self.register_a = self.ram[usize::from(instruction.operand.value())],
+            Opcode::PULB => self.register_b = self.ram[usize::from(instruction.operand.value())],
+            Opcode::GTLA => {
+                self.program_counter = self.ram[usize::from(instruction.operand.value())];
+                return false;
+            }
+            Opcode::GTLC => {
+                self.program_counter = instruction.operand.value();
+                return false;
+            }
+            Opcode::GTZA => {
+                if self.register_a == 0 {
+                    self.program_counter = self.ram[usize::from(instruction.operand.value())];
+                    return false;
+                }
+            }
+            Opcode::GTZC => {
+                if self.register_a == 0 {
+                    self.program_counter = instruction.operand.value();
+                    return false;
+                }
+            }
+            Opcode::NOOP => (), //Do nothing
+            Opcode::STOP => {
+                self.halted = true;
+                return false;
+            }
+        }
+        true
     }
 }

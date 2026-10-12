@@ -1,6 +1,8 @@
 use std::{num::ParseIntError, str::FromStr};
 use strum::{Display, EnumString};
 
+use crate::assembly::{Opcode::GTZC, Operand::Constant};
+
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, EnumString, Display)]
 pub enum Opcode {
@@ -23,18 +25,34 @@ pub enum Opcode {
 }
 
 impl Opcode {
-    fn takes_constant(&self) -> bool {
+    pub fn takes_constant(&self) -> bool {
         matches!(
             self,
             Opcode::SUMC | Opcode::SUBC | Opcode::GTLC | Opcode::GTZC
         )
     }
+
+    pub fn is_jump(&self) -> bool {
+        matches!(
+            self,
+            Opcode::GTLA | Opcode::GTLC | Opcode::GTZA | Opcode::GTZC
+        )
+    }
 }
 
+//TODO: is this struct needed? make sure that it at least keeps addresses valid
 #[derive(Copy, Clone, Debug)]
 pub enum Operand {
     Address(u8),
     Constant(u8),
+}
+
+impl Operand {
+    pub fn value(&self) -> u8 {
+        match self {
+            Self::Address(value) | Self::Constant(value) => *value,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
