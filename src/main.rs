@@ -1,21 +1,25 @@
 mod assembly;
 use assembly::{Instruction, Opcode, Operand};
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, MediaKeyCode::PlayPause};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     prelude::Style,
     style::{Color, Stylize},
-    symbols::{border, line},
-    text::{self, Line, Text},
+    symbols::border,
+    text::{Line, Text},
     widgets::{Block, Paragraph, Widget},
 };
-use std::{cmp::max, cmp::min};
+use std::time::SystemTime;
 use std::{fs, io};
+use std::{str::FromStr, time::Duration};
 
-use crate::ScrollType::{Natural, UserDefined};
+use crate::{
+    ScrollType::{Natural, UserDefined},
+    Speed::{Hertz, Instant, InstantPaused, Paused},
+};
 
 const MAX_PROGRAM_LENGTH: usize = 256;
 const ADDRESSES_IN_RAM: u8 = 32;
@@ -30,7 +34,7 @@ fn main() -> io::Result<()> {
             if args.check {
                 println!("Source code is OK!");
             } else {
-                ratatui::run(|terminal| App::new(instructions).run(terminal))?;
+                ratatui::run(|terminal| App::new(instructions, args.speed).run(terminal))?;
             }
         }
         Err(error_messages) => {
@@ -74,6 +78,9 @@ struct Args {
     /// Check the assembly file for errors
     #[arg(short, long, action = clap::ArgAction::SetTrue)]
     check: bool,
+
+    #[arg(short, long, default_value = "INSTANT")]
+    speed: Speed,
 }
 
 #[derive(Debug)]
@@ -81,6 +88,7 @@ struct App {
     cpu: CPU,
     exit: bool,
     source_code_scroll: ScrollType,
+    speed: Speed,
 }
 
 #[derive(Debug)]
@@ -97,8 +105,51 @@ impl ScrollType {
     }
 }
 
+#[derive(Debug, Clone)]
+enum Speed {
+    Hertz(f64),
+    Paused(f64),
+    Instant,
+    InstantPaused,
+}
+
+impl Speed {
+    fn is_paused(&self) -> bool {
+        return matches!(self, Paused(_) | InstantPaused);
+    }
+
+    fn duration(&self) -> Duration {
+        match self {
+            Speed::Hertz(hz) => Duration::from_secs_f64(1.0 / hz),
+            Paused(hz) => Duration::from_secs_f64(1.0 / hz),
+            Instant => Duration::ZERO,
+            InstantPaused => Duration::ZERO,
+        }
+    }
+}
+
+impl FromStr for Speed {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("INSTANT") {
+            return Ok(Speed::Instant);
+        }
+
+        let value: f64 = s
+            .parse()
+            .map_err(|_| format!("{} is not a number or INSTANT", s))?;
+
+        if !value.is_finite() || value <= 0.0 {
+            return Err(format!("Speed must be a positive number, got '{}'", s));
+        }
+
+        Ok(Speed::Paused(value))
+    }
+}
+
 impl App {
-    fn new(instructions: [Instruction; MAX_PROGRAM_LENGTH]) -> Self {
+    fn new(instructions: [Instruction; MAX_PROGRAM_LENGTH], speed: Speed) -> Self {
         Self {
             cpu: CPU {
                 instructions,
@@ -106,15 +157,18 @@ impl App {
             },
             exit: false,
             source_code_scroll: Natural(0),
+            speed,
         }
     }
 
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
-            terminal.draw(|frame| self.draw(frame));
+            terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
+            if !self.speed.is_paused() {
+                self.step();
+            }
         }
-
         Ok(())
     }
 
@@ -123,44 +177,27 @@ impl App {
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
-        match event::read()? {
-            // it's important to check that the event is a key press event as
-            // crossterm also emits key release and repeat events on Windows.
-            // This basically just filters for keypresses
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                self.handle_key_event(key_event)
-            }
-            _ => {}
-        };
+        if self.speed.is_paused() || event::poll(self.speed.duration())? {
+            match event::read()? {
+                // it's important to check that the event is a key press event as
+                // crossterm also emits key release and repeat events on Windows.
+                // This basically just filters for keypresses
+                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                    self.handle_key_event(key_event)
+                }
+                _ => {}
+            };
+        }
         Ok(())
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
-            KeyCode::Down => {
-                self.source_code_scroll = UserDefined(
-                    if self.source_code_scroll.value() + 1
-                        > (MAX_PROGRAM_LENGTH - 1)
-                            .try_into()
-                            .expect("Program length greater than max scroll")
-                    {
-                        (MAX_PROGRAM_LENGTH - 1)
-                            .try_into()
-                            .expect("Program length greater than max scroll")
-                    } else {
-                        self.source_code_scroll.value() + 1
-                    },
-                )
-            }
-            KeyCode::Up => {
-                self.source_code_scroll = UserDefined(if self.source_code_scroll.value() > 0 {
-                    self.source_code_scroll.value() - 1
-                } else {
-                    0
-                })
-            }
+            KeyCode::Down => self.scroll_down(),
+            KeyCode::Up => self.scroll_up(),
             KeyCode::Char('n') => self.step(),
+            KeyCode::Char(' ') => self.toggle_paused(),
             _ => {}
         }
     }
@@ -174,6 +211,23 @@ impl App {
         }
     }
 
+    fn scroll_up(&mut self) {
+        self.source_code_scroll = UserDefined(self.source_code_scroll.value().saturating_sub(1))
+    }
+
+    fn scroll_down(&mut self) {
+        self.source_code_scroll = UserDefined(self.source_code_scroll.value().saturating_add(1))
+    }
+
+    fn toggle_paused(&mut self) {
+        self.speed = match self.speed {
+            Speed::Hertz(hz) => Paused(hz),
+            Speed::Paused(hz) => Hertz(hz),
+            Instant => InstantPaused,
+            InstantPaused => Instant,
+        };
+    }
+
     fn exit(&mut self) {
         self.exit = true;
     }
@@ -183,6 +237,8 @@ impl Widget for &mut App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let color = if self.cpu.halted {
             Color::Red
+        } else if self.speed.is_paused() {
+            Color::Blue
         } else {
             Color::Green
         };
@@ -215,8 +271,10 @@ impl Widget for &mut App {
             let instruction_line = if index == usize::from(self.cpu.program_counter) {
                 let inline_message = if self.cpu.halted {
                     "(Halted)"
-                } else {
+                } else if self.speed.is_paused() {
                     "(Runs on step)"
+                } else {
+                    "(Running)"
                 };
                 Line::from(format!("{:03} | {} {}", index, instruction, inline_message))
                     .fg(Color::Red)
@@ -255,7 +313,8 @@ impl Widget for &mut App {
             .fg(color);
         let debug_inner_area = debug_block.inner(debug_tools_area);
         debug_block.render(debug_tools_area, buf);
-        let debug_line = Line::from("Scroll: <Up>/<Down>, Step: n").fg(Color::White);
+        let debug_line =
+            Line::from("Scroll: <Up>/<Down> | Step: n | Toggle pause: <Space>").fg(Color::White);
         debug_line.render(debug_inner_area, buf);
 
         //===== Split RAM and Register areas into left and right =====
