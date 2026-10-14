@@ -1,7 +1,7 @@
 mod assembly;
 use assembly::{Instruction, Opcode, Operand};
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, MediaKeyCode::PlayPause};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
@@ -10,10 +10,10 @@ use ratatui::{
     style::{Color, Stylize},
     symbols::border,
     text::{Line, Text},
-    widgets::{Block, Paragraph, Widget},
+    widgets::{Block, Paragraph, Widget, Wrap},
 };
-use std::fmt::Display;
-use std::{fmt::write, fs, io};
+use std::{collections::VecDeque, fmt::Display};
+use std::{fs, io};
 use std::{str::FromStr, time::Duration};
 
 use crate::{
@@ -21,6 +21,7 @@ use crate::{
     Speed::{Hertz, Instant, InstantPaused, Paused},
 };
 
+const HISTORY_SIZE: usize = 10_000;
 const MAX_PROGRAM_LENGTH: usize = 256;
 const ADDRESSES_IN_RAM: u8 = 32;
 
@@ -86,6 +87,7 @@ struct Args {
 #[derive(Debug)]
 struct App {
     memory: Memory,
+    history: VecDeque<Memory>,
     instructions: [Instruction; MAX_PROGRAM_LENGTH],
     exit: bool,
     source_code_scroll: ScrollType,
@@ -116,11 +118,7 @@ enum Speed {
 
 impl Speed {
     fn is_paused(&self) -> bool {
-        return matches!(self, Paused(_) | InstantPaused);
-    }
-
-    fn is_instant(&self) -> bool {
-        return matches!(self, Instant | InstantPaused);
+        matches!(self, Paused(_) | InstantPaused)
     }
 
     fn duration(&self) -> Duration {
@@ -174,6 +172,7 @@ impl App {
             memory: Memory {
                 ..Memory::default()
             },
+            history: VecDeque::with_capacity(HISTORY_SIZE),
             instructions,
             exit: false,
             source_code_scroll: Natural(0),
@@ -220,6 +219,7 @@ impl App {
             KeyCode::Right => self.increase_speed(),
             KeyCode::Char('n') => self.step(),
             KeyCode::Char(' ') => self.toggle_paused(),
+            KeyCode::Char('b') => self.undo(),
             _ => {}
         }
     }
@@ -229,8 +229,15 @@ impl App {
         //stored so manual scrolling can start where natural left off.
         if !self.memory.halted {
             self.source_code_scroll = Natural(self.source_code_scroll.value());
+            self.history.push_back(self.memory.clone()); //Save the current state to history
             self.memory
                 .step(self.instructions[usize::from(self.memory.program_counter)]);
+        }
+    }
+
+    fn undo(&mut self) {
+        if let Some(prev) = self.history.pop_back() {
+            self.memory = prev;
         }
     }
 
@@ -372,11 +379,10 @@ impl Widget for &mut App {
             .fg(color);
         let debug_inner_area = debug_block.inner(debug_tools_area);
         debug_block.render(debug_tools_area, buf);
-        let debug_line = Line::from(
-            "Scroll: <Up>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right>",
-        )
-        .fg(Color::White);
-        debug_line.render(debug_inner_area, buf);
+        let debug_para = Paragraph::new(
+            format!("Scroll: <Up>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b", self.history.len())
+        ).fg(Color::White).wrap(Wrap { trim: true });
+        debug_para.render(debug_inner_area, buf);
 
         //===== Split RAM and Register areas into left and right =====
         let [card_x_area, card_y_area] =
@@ -459,7 +465,7 @@ impl Widget for &mut App {
 
 // TODO: add I/O
 // TODO: Get max to figure out what Mem is
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct Memory {
     register_a: u8,
     register_b: u8,
