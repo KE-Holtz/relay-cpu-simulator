@@ -15,6 +15,7 @@ use ratatui::{
     text::{Line, Text},
     widgets::{Block, Paragraph, Widget, Wrap},
 };
+use regex::regex;
 use std::{collections::VecDeque, fmt::Display};
 use std::{fs, io};
 use std::{str::FromStr, time::Duration};
@@ -59,9 +60,12 @@ fn parse_instructions(source: &str) -> Result<[Instruction; MAX_PROGRAM_LENGTH],
     let mut error_lines: Vec<String> = Vec::new();
 
     for (index, instruction_str) in source.lines().enumerate() {
-        match instruction_str.parse() {
-            Ok(instruction) => instructions[index] = instruction,
-            Err(e) => error_lines.push(format!("Error at line {}: {}", index + 1, e)),
+        let before_comment = instruction_str.split("//").next().unwrap_or("").trim();
+        if !before_comment.is_empty() {
+            match before_comment.parse() {
+                Ok(instruction) => instructions[index] = instruction,
+                Err(e) => error_lines.push(format!("Error at line {}: {}", index + 1, e)),
+            }
         }
     }
 
@@ -222,7 +226,7 @@ impl App {
             KeyCode::Right => self.increase_speed(),
             KeyCode::Char('n') => self.step(),
             KeyCode::Char(' ') => self.toggle_paused(),
-            KeyCode::Char('b') => self.undo(),
+            KeyCode::Char('b') | KeyCode::Char('u') => self.undo(),
             _ => {}
         }
     }
@@ -383,7 +387,7 @@ impl Widget for &mut App {
         let debug_inner_area = debug_block.inner(debug_tools_area);
         debug_block.render(debug_tools_area, buf);
         let debug_para = Paragraph::new(
-            format!("Scroll: <Ups>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b", self.history.len())
+            format!("Scroll: <Ups>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b/u", self.history.len())
         ).fg(Color::White).wrap(Wrap { trim: true });
         debug_para.render(debug_inner_area, buf);
 

@@ -1,3 +1,6 @@
+//This example won't really do anything, 
+//but it serves as an outline of how files are strucured
+//This is a comment
 SUMA 00000000
 SUMC 00000000
 SUBA 00000000
@@ -6,9 +9,10 @@ SFTL 00000000
 SFTR 00000000
 PSHA 00000000
 PSHB 00000000
+//This is also a comment
 PULA 00000000
 PULB 00000000
-GTLA 00000000
+GTLA 00000000 //Infinite loop!
 GTLC 00000000
 GTZA 00000000
 GTZC 00000000
