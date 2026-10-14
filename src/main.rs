@@ -7,7 +7,10 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     prelude::Style,
-    style::{Color, Stylize},
+    style::{
+        Color::{self, LightBlue},
+        Stylize,
+    },
     symbols::border,
     text::{Line, Text},
     widgets::{Block, Paragraph, Widget, Wrap},
@@ -80,7 +83,7 @@ struct Args {
     #[arg(short, long, action = clap::ArgAction::SetTrue)]
     check: bool,
 
-    #[arg(short, long, default_value = "INSTANT")]
+    #[arg(short, long, default_value = "10")]
     speed: Speed,
 }
 
@@ -380,7 +383,7 @@ impl Widget for &mut App {
         let debug_inner_area = debug_block.inner(debug_tools_area);
         debug_block.render(debug_tools_area, buf);
         let debug_para = Paragraph::new(
-            format!("Scroll: <Up>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b", self.history.len())
+            format!("Scroll: <Ups>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b", self.history.len())
         ).fg(Color::White).wrap(Wrap { trim: true });
         debug_para.render(debug_inner_area, buf);
 
@@ -403,7 +406,17 @@ impl Widget for &mut App {
 
         let register_a_paragraph = Paragraph::new(format!("{:08b}", self.memory.register_a))
             .centered()
-            .fg(Color::White);
+            .fg(
+                if self
+                    .history
+                    .back()
+                    .is_some_and(|last_mem| last_mem.register_a != self.memory.register_a)
+                {
+                    Color::LightBlue
+                } else {
+                    Color::White
+                },
+            );
         register_a_paragraph.render(register_a_inner, buf);
 
         let register_b_title = Line::from(" Register B ".bold());
@@ -416,7 +429,17 @@ impl Widget for &mut App {
 
         let register_b_paragraph = Paragraph::new(format!("{:08b}", self.memory.register_b))
             .centered()
-            .fg(Color::White);
+            .fg(
+                if self
+                    .history
+                    .back()
+                    .is_some_and(|last_mem| last_mem.register_b != self.memory.register_b)
+                {
+                    Color::LightBlue
+                } else {
+                    Color::White
+                },
+            );
         register_b_paragraph.render(register_b_inner, buf);
 
         //===== Render RAM =====
@@ -439,9 +462,15 @@ impl Widget for &mut App {
         let mut card_x_lines = vec![];
         let mut card_y_lines = vec![];
         for (address, value) in self.memory.ram.iter().enumerate() {
-            let line = if matches!(address, 14 | 15 | 30 | 31) {
+            let line = if self
+                .history
+                .back()
+                .is_some_and(|last_mem| last_mem.ram[address] != self.memory.ram[address])
+            {
                 Line::from(format!("{:08b}: {:08b}", address, value))
-                    .style(Style::default().fg(Color::Red))
+                    .style(Style::default().fg(Color::LightBlue))
+            } else if matches!(address, 14 | 15 | 30 | 31) {
+                Line::from(format!("{:08b}: {:08b}", address, value)).fg(Color::Red)
             } else {
                 Line::from(format!("{:08b}: {:08b}", address, value)).fg(Color::White)
             };
