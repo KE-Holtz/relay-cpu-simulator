@@ -1202,7 +1202,6 @@ dependencies = [
  "clap",
  "crossterm",
  "ratatui",
- "regex",
  "strum",
 ]
 

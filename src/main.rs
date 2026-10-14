@@ -8,15 +8,17 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     prelude::Style,
     style::{
-        Color::{self, LightBlue},
+        Color::{self},
         Stylize,
     },
     symbols::border,
     text::{Line, Text},
     widgets::{Block, Paragraph, Widget, Wrap},
 };
-use regex::regex;
-use std::{collections::VecDeque, fmt::Display};
+use std::{
+    collections::VecDeque,
+    fmt::{Display, format},
+};
 use std::{fs, io};
 use std::{str::FromStr, time::Duration};
 
@@ -99,6 +101,7 @@ struct App {
     exit: bool,
     source_code_scroll: ScrollType,
     speed: Speed,
+    base_mode: assembly::Base,
 }
 
 #[derive(Debug)]
@@ -183,6 +186,7 @@ impl App {
             instructions,
             exit: false,
             source_code_scroll: Natural(0),
+            base_mode: assembly::Base::Binary,
             speed,
         }
     }
@@ -227,6 +231,7 @@ impl App {
             KeyCode::Char('n') => self.step(),
             KeyCode::Char(' ') => self.toggle_paused(),
             KeyCode::Char('b') | KeyCode::Char('u') => self.undo(),
+            KeyCode::Char('m') => self.cycle_base_mode(),
             _ => {}
         }
     }
@@ -291,6 +296,10 @@ impl App {
         };
     }
 
+    fn cycle_base_mode(&mut self) {
+        self.base_mode = self.base_mode.next();
+    }
+
     fn exit(&mut self) {
         self.exit = true;
     }
@@ -349,10 +358,20 @@ impl Widget for &mut App {
                 } else {
                     "(Running)"
                 };
-                Line::from(format!("{:03} | {} {}", index, instruction, inline_message))
-                    .fg(Color::Red)
+                Line::from(format!(
+                    "{:03} | {} {}",
+                    index,
+                    instruction.base(&self.base_mode),
+                    inline_message
+                ))
+                .fg(Color::Red)
             } else {
-                Line::from(format!("{:03} | {}", index, instruction)).fg(Color::White)
+                Line::from(format!(
+                    "{:03} | {}",
+                    index,
+                    instruction.base(&self.base_mode)
+                ))
+                .fg(Color::White)
             };
             lines.push(instruction_line);
         }
@@ -387,7 +406,7 @@ impl Widget for &mut App {
         let debug_inner_area = debug_block.inner(debug_tools_area);
         debug_block.render(debug_tools_area, buf);
         let debug_para = Paragraph::new(
-            format!("Scroll: <Ups>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b/u", self.history.len())
+            format!("Scroll: <Ups>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b/u | Switch display mode: m", self.history.len())
         ).fg(Color::White).wrap(Wrap { trim: true });
         debug_para.render(debug_inner_area, buf);
 
@@ -408,7 +427,7 @@ impl Widget for &mut App {
         let register_a_inner = register_a_block.inner(register_a_area);
         register_a_block.render(register_a_area, buf);
 
-        let register_a_paragraph = Paragraph::new(format!("{:08b}", self.memory.register_a))
+        let register_a_paragraph = Paragraph::new(self.memory.register_a.base(&self.base_mode))
             .centered()
             .fg(
                 if self
@@ -431,7 +450,7 @@ impl Widget for &mut App {
         let register_b_inner = register_b_block.inner(register_b_area);
         register_b_block.render(register_b_area, buf);
 
-        let register_b_paragraph = Paragraph::new(format!("{:08b}", self.memory.register_b))
+        let register_b_paragraph = Paragraph::new(self.memory.register_b.base(&self.base_mode))
             .centered()
             .fg(
                 if self
@@ -471,12 +490,26 @@ impl Widget for &mut App {
                 .back()
                 .is_some_and(|last_mem| last_mem.ram[address] != self.memory.ram[address])
             {
-                Line::from(format!("{:08b}: {:08b}", address, value))
-                    .style(Style::default().fg(Color::LightBlue))
+                Line::from(format!(
+                    "{}: {}",
+                    address.base(&self.base_mode),
+                    value.base(&self.base_mode)
+                ))
+                .style(Style::default().fg(Color::LightBlue))
             } else if matches!(address, 14 | 15 | 30 | 31) {
-                Line::from(format!("{:08b}: {:08b}", address, value)).fg(Color::Red)
+                Line::from(format!(
+                    "{}: {}",
+                    address.base(&self.base_mode),
+                    value.base(&self.base_mode)
+                ))
+                .fg(Color::Red)
             } else {
-                Line::from(format!("{:08b}: {:08b}", address, value)).fg(Color::White)
+                Line::from(format!(
+                    "{}: {}",
+                    address.base(&self.base_mode),
+                    value.base(&self.base_mode)
+                ))
+                .fg(Color::White)
             };
 
             if address < usize::from(ADDRESSES_IN_RAM / 2) {
@@ -498,27 +531,13 @@ impl Widget for &mut App {
 
 // TODO: add I/O
 // TODO: Get max to figure out what Mem is
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Memory {
     register_a: u8,
     register_b: u8,
-    mem: u8,
     program_counter: u8,
     ram: [u8; 32],
     halted: bool,
-}
-
-impl Default for Memory {
-    fn default() -> Self {
-        Self {
-            register_a: 0,
-            register_b: 0,
-            mem: 0,
-            program_counter: 0,
-            ram: [0u8; 32],
-            halted: false,
-        }
-    }
 }
 
 impl Memory {
@@ -570,5 +589,31 @@ impl Memory {
             }
         }
         true
+    }
+}
+
+//TODO: make a util module with this and the base stuff from assembly
+//TODO: Think up a better name
+trait MultiBase {
+    fn base(&self, base: &assembly::Base) -> String;
+}
+
+impl MultiBase for u8 {
+    fn base(&self, base: &assembly::Base) -> String {
+        match base {
+            assembly::Base::Binary => format!("{:08b}", self),
+            assembly::Base::Decimal => format!("{}", self),
+            assembly::Base::Hex => format!("0x{:02x}", self),
+        }
+    }
+}
+
+impl MultiBase for usize {
+    fn base(&self, base: &assembly::Base) -> String {
+        match base {
+            assembly::Base::Binary => format!("{:08b}", self),
+            assembly::Base::Decimal => format!("{}", self),
+            assembly::Base::Hex => format!("0x{:02x}", self),
+        }
     }
 }

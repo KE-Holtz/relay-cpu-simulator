@@ -1,9 +1,8 @@
 use std::{num::ParseIntError, str::FromStr};
 use strum::{Display, EnumString};
 
-use crate::assembly::{Opcode::GTZC, Operand::Constant};
-
 #[repr(u8)]
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Copy, Clone, Debug, EnumString, Display)]
 pub enum Opcode {
     SUMA = 0b0000u8,
@@ -29,13 +28,6 @@ impl Opcode {
         matches!(
             self,
             Opcode::SUMC | Opcode::SUBC | Opcode::GTLC | Opcode::GTZC
-        )
-    }
-
-    pub fn is_jump(&self) -> bool {
-        matches!(
-            self,
-            Opcode::GTLA | Opcode::GTLC | Opcode::GTZA | Opcode::GTZC
         )
     }
 }
@@ -72,7 +64,7 @@ impl Default for Instruction {
 
 pub enum ParseInstructionError {
     InvalidFormat,
-    InvalidOpcode,
+    UnkownOpcode,
     InvalidOperand(ParseIntError),
 }
 
@@ -83,8 +75,8 @@ impl From<ParseIntError> for ParseInstructionError {
 }
 
 impl From<strum::ParseError> for ParseInstructionError {
-    fn from(value: strum::ParseError) -> Self {
-        Self::InvalidOpcode
+    fn from(_value: strum::ParseError) -> Self {
+        Self::UnkownOpcode
     }
 }
 
@@ -92,7 +84,7 @@ impl std::fmt::Display for ParseInstructionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidFormat => write!(f, "Invalid Format"),
-            Self::InvalidOpcode => write!(f, "Invalid Opcode"),
+            Self::UnkownOpcode => write!(f, "Invalid Opcode"),
             Self::InvalidOperand(error) => write!(f, "Error parsing Operand ({})", error),
         }
     }
@@ -102,7 +94,7 @@ impl FromStr for Instruction {
     type Err = ParseInstructionError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.trim().split_whitespace();
+        let mut parts = s.split_whitespace();
         let opcode_str = parts.next().ok_or(ParseInstructionError::InvalidFormat)?;
         let operand_str = parts.next().ok_or(ParseInstructionError::InvalidFormat)?;
 
@@ -129,6 +121,32 @@ impl std::fmt::Display for Instruction {
             Operand::Address(value) | Operand::Constant(value) => {
                 write!(f, "{} {:08b}", self.opcode, value) //:08b makes it display as 8 digits of binary
             }
+        }
+    }
+}
+
+impl Instruction {
+    pub fn base(&self, base: &Base) -> String {
+        match base {
+            Base::Binary => format!("{} {:08b}", self.opcode, self.operand.value()),
+            Base::Decimal => format!("{} {}", self.opcode, self.operand.value()),
+            Base::Hex => format!("{} 0x{:02x}", self.opcode, self.operand.value()),
+        }
+    }
+}
+#[derive(Debug)]
+pub enum Base {
+    Binary,
+    Decimal,
+    Hex,
+}
+
+impl Base {
+    pub fn next(&self) -> Self {
+        match self {
+            Base::Binary => Base::Decimal,
+            Base::Decimal => Base::Hex,
+            Base::Hex => Base::Binary,
         }
     }
 }
