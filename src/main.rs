@@ -15,10 +15,7 @@ use ratatui::{
     text::{Line, Text},
     widgets::{Block, Paragraph, Widget, Wrap},
 };
-use std::{
-    collections::VecDeque,
-    fmt::{Display, format},
-};
+use std::{collections::VecDeque, fmt::Display};
 use std::{fs, io};
 use std::{str::FromStr, time::Duration};
 
@@ -232,6 +229,7 @@ impl App {
             KeyCode::Char(' ') => self.toggle_paused(),
             KeyCode::Char('b') | KeyCode::Char('u') => self.undo(),
             KeyCode::Char('m') => self.cycle_base_mode(),
+            KeyCode::Char('r') => self.restart(),
             _ => {}
         }
     }
@@ -294,6 +292,10 @@ impl App {
             Instant => InstantPaused,
             InstantPaused => Instant,
         };
+    }
+
+    fn restart(&mut self) {
+        self.memory = Memory::default();
     }
 
     fn cycle_base_mode(&mut self) {
@@ -406,7 +408,7 @@ impl Widget for &mut App {
         let debug_inner_area = debug_block.inner(debug_tools_area);
         debug_block.render(debug_tools_area, buf);
         let debug_para = Paragraph::new(
-            format!("Scroll: <Ups>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b/u | Switch display mode: m", self.history.len())
+            format!("Scroll: <Ups>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b/u | Switch display mode: m | Restart: r", self.history.len())
         ).fg(Color::White).wrap(Wrap { trim: true });
         debug_para.render(debug_inner_area, buf);
 
