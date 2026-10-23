@@ -6,6 +6,7 @@ use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
+    macros::{horizontal, vertical},
     prelude::Style,
     style::{
         Color::{self},
@@ -13,7 +14,7 @@ use ratatui::{
     },
     symbols::border,
     text::{Line, Text},
-    widgets::{Block, Paragraph, Widget, Wrap},
+    widgets::{Block, Clear, Padding, Paragraph, Widget, Wrap},
 };
 use std::{collections::VecDeque, fmt::Display};
 use std::{fs, io};
@@ -95,10 +96,16 @@ struct App {
     memory: Memory,
     history: VecDeque<Memory>,
     instructions: [Instruction; MAX_PROGRAM_LENGTH],
+
     exit: bool,
     source_code_scroll: ScrollType,
     speed: Speed,
     base_mode: assembly::Base,
+
+    io_edit_mode: bool,
+    focused_io_register: usize,
+    io_editor_values: [Option<String>; 4],
+    io_editor_error_message: Option<String>,
 }
 
 #[derive(Debug)]
@@ -185,6 +192,11 @@ impl App {
             source_code_scroll: Natural(0),
             base_mode: assembly::Base::Binary,
             speed,
+
+            io_edit_mode: false,
+            focused_io_register: 0,
+            io_editor_values: [const { None }; 4],
+            io_editor_error_message: None,
         }
     }
 
@@ -227,9 +239,14 @@ impl App {
             KeyCode::Right => self.increase_speed(),
             KeyCode::Char('n') => self.step(),
             KeyCode::Char(' ') => self.toggle_paused(),
-            KeyCode::Char('b') | KeyCode::Char('u') => self.undo(),
+            KeyCode::Char('u') => self.undo(),
             KeyCode::Char('m') => self.cycle_base_mode(),
             KeyCode::Char('r') => self.restart(),
+            KeyCode::Char('i') => self.toggle_io_mode(),
+            KeyCode::Char(c) if c.is_digit(self.base_mode.radix()) => self.take_io_input(c),
+            KeyCode::Backspace => self.io_input_backspace(),
+            KeyCode::Enter => self.enter_io_input(),
+            //in IO registers
             _ => {}
         }
     }
@@ -252,11 +269,25 @@ impl App {
     }
 
     fn scroll_up(&mut self) {
-        self.source_code_scroll = UserDefined(self.source_code_scroll.value().saturating_sub(1))
+        if self.io_edit_mode {
+            self.focused_io_register = match self.focused_io_register {
+                0 => 3,
+                n => n - 1,
+            }
+        } else {
+            self.source_code_scroll = UserDefined(self.source_code_scroll.value().saturating_sub(1))
+        }
     }
 
     fn scroll_down(&mut self) {
-        self.source_code_scroll = UserDefined(self.source_code_scroll.value().saturating_add(1))
+        if self.io_edit_mode {
+            self.focused_io_register = match self.focused_io_register {
+                3 => 0,
+                n => n + 1,
+            }
+        } else {
+            self.source_code_scroll = UserDefined(self.source_code_scroll.value().saturating_add(1))
+        }
     }
 
     fn increase_speed(&mut self) {
@@ -300,6 +331,51 @@ impl App {
 
     fn cycle_base_mode(&mut self) {
         self.base_mode = self.base_mode.next();
+        self.io_editor_values = [const { None }; 4]
+    }
+
+    fn toggle_io_mode(&mut self) {
+        self.io_edit_mode = !self.io_edit_mode;
+    }
+
+    fn take_io_input(&mut self, c: char) {
+        self.io_editor_values[self.focused_io_register]
+            .get_or_insert_with(String::new)
+            .push(c);
+    }
+
+    fn io_input_backspace(&mut self) {
+        let slot = &mut self.io_editor_values[self.focused_io_register];
+        match slot {
+            Some(s) if s.len() <= 1 => *slot = None,
+            Some(s) => {
+                s.pop();
+            } //Err
+            None => (),
+        }
+    }
+
+    fn enter_io_input(&mut self) {
+        let slot = &self.io_editor_values[self.focused_io_register];
+        if let Some(s) = slot {
+            let parse_result = u8::from_str_radix(s, self.base_mode.radix());
+            match parse_result {
+                Ok(n) => {
+                    self.history.push_back(self.memory.clone()); //Save the current state to history
+                    self.memory.ram[match self.focused_io_register {
+                        0 => 14,
+                        1 => 15,
+                        2 => 30,
+                        3 => 31,
+                        _ => panic!("Impossible state"),
+                    }] = n;
+                    self.io_edit_mode = false;
+                    self.io_editor_values[self.focused_io_register] = None;
+                    self.io_editor_error_message = None;
+                }
+                Err(_) => self.io_editor_error_message = Some(String::from("Invalid input")),
+            }
+        }
     }
 
     fn exit(&mut self) {
@@ -408,7 +484,7 @@ impl Widget for &mut App {
         let debug_inner_area = debug_block.inner(debug_tools_area);
         debug_block.render(debug_tools_area, buf);
         let debug_para = Paragraph::new(
-            format!("Scroll: <Ups>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b/u | Switch display mode: m | Restart: r", self.history.len())
+            format!("Scroll: <Ups>/<Down> | Step: n | Toggle pause: <Space> | Adjust speed: <Left>/<Right> | Undo ({} stored states): b/u | Switch display mode: m | Restart: r | Enter IO edit mode: i", self.history.len())
         ).fg(Color::White).wrap(Wrap { trim: true });
         debug_para.render(debug_inner_area, buf);
 
@@ -528,6 +604,69 @@ impl Widget for &mut App {
 
         card_x_paragraph.render(card_x_inner, buf);
         card_y_paragraph.render(card_y_inner, buf);
+
+        if self.io_edit_mode {
+            let popup_block = match self.io_editor_error_message {
+                Some(ref s) => Block::bordered()
+                    .title("Edit IO Registers")
+                    .title_bottom(Line::from(s.as_str()).centered())
+                    .red(),
+                None => Block::bordered().title("Edit IO Registers"),
+            };
+            let popup_area = area.centered(Constraint::Percentage(50), Constraint::Length(18));
+            let popup_inner = popup_block.inner(popup_area);
+            Clear.render(popup_area, buf);
+            popup_block.render(popup_area, buf);
+
+            let register_area = vertical![==4, ==4, ==4, ==4].split(popup_inner);
+            for i in 0..4 {
+                let focused = i == self.focused_io_register;
+                let address = match i {
+                    0 => 14,
+                    1 => 15,
+                    2 => 30,
+                    3 => 31,
+                    _ => panic!("Impossible state"),
+                };
+                let value = self.memory.ram[address];
+
+                let line = Line::from(format!(
+                    "{}: {}",
+                    address.base(&self.base_mode),
+                    value.base(&self.base_mode)
+                ))
+                .centered();
+
+                let new_value_line = match self.io_editor_values[i] {
+                    Some(ref value) => Line::from(format!(
+                        "{}{value}",
+                        match self.base_mode {
+                            assembly::Base::Binary => "0b",
+                            assembly::Base::Decimal => "",
+                            assembly::Base::Hex => "0x",
+                        }
+                    )),
+                    None => Line::from(match self.base_mode {
+                        assembly::Base::Binary => "0b",
+                        assembly::Base::Decimal => "",
+                        assembly::Base::Hex => "0x",
+                    }),
+                };
+
+                let area = register_area[i];
+                let layout = horizontal![==66%, ==34%].split(area);
+                let block = Block::bordered().padding(Padding::ZERO).fg(if focused {
+                    Color::Blue
+                } else {
+                    Color::default()
+                });
+
+                line.render(layout[0], buf);
+                let block_inner = block.inner(layout[1]);
+                new_value_line.render(block_inner, buf);
+                block.render(layout[1], buf);
+            }
+        }
     }
 }
 

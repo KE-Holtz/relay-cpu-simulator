@@ -149,4 +149,12 @@ impl Base {
             Base::Hex => Base::Binary,
         }
     }
+
+    pub fn radix(&self) -> u32 {
+        match self {
+            Base::Binary => 2,
+            Base::Decimal => 10,
+            Base::Hex => 16,
+        }
+    }
 }
