@@ -6,7 +6,7 @@ use strum::{Display, EnumString};
 #[derive(Copy, Clone, Debug, EnumString, Display)]
 pub enum Opcode {
     SUMA = 0b0000u8,
-    SUMC = 0b0001u8, // Not in use/do nothing
+    SUMC = 0b0001u8,
     SUBA = 0b0010u8,
     SUBC = 0b0011u8,
     SFTL = 0b0100u8,

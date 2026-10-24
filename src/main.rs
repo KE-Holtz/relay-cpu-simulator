@@ -1,5 +1,7 @@
 mod assembly;
+mod break_condition;
 use assembly::{Instruction, Opcode, Operand};
+use break_condition::BreakCondition;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
@@ -35,11 +37,13 @@ fn main() -> io::Result<()> {
     let file_contents = fs::read_to_string(args.source).expect("Error: Unable to read source file");
 
     match parse_instructions(&file_contents) {
-        Ok(instructions) => {
+        Ok((instructions, break_conditions)) => {
             if args.check {
                 println!("Source code is OK!");
             } else {
-                ratatui::run(|terminal| App::new(instructions, args.speed).run(terminal))?;
+                ratatui::run(|terminal| {
+                    App::new(instructions, break_conditions, args.speed).run(terminal)
+                })?;
             }
         }
         Err(error_messages) => {
@@ -51,17 +55,26 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn parse_instructions(source: &str) -> Result<[Instruction; MAX_PROGRAM_LENGTH], Vec<String>> {
+fn parse_instructions(
+    source: &str,
+) -> Result<([Instruction; MAX_PROGRAM_LENGTH], Vec<BreakCondition>), Vec<String>> {
     let noop = Instruction {
         opcode: Opcode::NOOP,
         operand: Operand::Constant(0u8),
     };
     let mut instructions = [noop; MAX_PROGRAM_LENGTH];
+    let mut break_conditions: Vec<BreakCondition> = vec![];
     let mut error_lines: Vec<String> = Vec::new();
 
     for (index, instruction_str) in source.lines().enumerate() {
         let before_comment = instruction_str.split("//").next().unwrap_or("").trim();
         if !before_comment.is_empty() {
+            if before_comment.contains("BREAKIF") {
+                match before_comment.parse() {
+                    Ok(break_condition) => break_conditions.push(break_condition),
+                    Err(e) => error_lines.push(format!("Error at line {}: {}", index + 1, e)),
+                }
+            }
             match before_comment.parse() {
                 Ok(instruction) => instructions[index] = instruction,
                 Err(e) => error_lines.push(format!("Error at line {}: {}", index + 1, e)),
@@ -70,7 +83,7 @@ fn parse_instructions(source: &str) -> Result<[Instruction; MAX_PROGRAM_LENGTH],
     }
 
     if error_lines.is_empty() {
-        Ok(instructions)
+        Ok((instructions, break_conditions))
     } else {
         Err(error_lines)
     }
@@ -91,12 +104,11 @@ struct Args {
     speed: Speed,
 }
 
-#[derive(Debug)]
-struct App {
+pub struct App {
     memory: Memory,
     history: VecDeque<Memory>,
     instructions: [Instruction; MAX_PROGRAM_LENGTH],
-
+    break_conditions: Vec<BreakCondition>,
     exit: bool,
     source_code_scroll: ScrollType,
     speed: Speed,
@@ -181,13 +193,18 @@ impl Display for Speed {
 }
 
 impl App {
-    fn new(instructions: [Instruction; MAX_PROGRAM_LENGTH], speed: Speed) -> Self {
+    fn new(
+        instructions: [Instruction; MAX_PROGRAM_LENGTH],
+        break_conditions: Vec<BreakCondition>,
+        speed: Speed,
+    ) -> Self {
         Self {
             memory: Memory {
                 ..Memory::default()
             },
             history: VecDeque::with_capacity(HISTORY_SIZE),
             instructions,
+            break_conditions,
             exit: false,
             source_code_scroll: Natural(0),
             base_mode: assembly::Base::Binary,
